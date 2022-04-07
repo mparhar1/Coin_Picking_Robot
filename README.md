@@ -1,1 +1,0 @@
-# ELEC291_Coin_Picking_Robot

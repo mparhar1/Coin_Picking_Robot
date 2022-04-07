@@ -16,8 +16,15 @@
 #define SYSCLK 40000000L
 #define FREQ 100000L // We need the ISR for timer 1 every 10 us
 #define Baud2BRG(desired_baud)( (SYSCLK / (16*desired_baud))-1)
+#define MINANGLE 60
+#define MAXANGLE 240
+#define MAXANGLE_ARM 170
+#define MINANGLE_BASE 90
+#define BASEANGLE_COLLECT 0
+#define ARMANGLE_COLLECT 0
 
-volatile int ISR_pwm1=150, ISR_pwm2=150, ISR_cnt=0;
+
+volatile int ISR_pwm1=MINANGLE, ISR_pwm2=MINANGLE, ISR_cnt=0;
 
 // The Interrupt Service Routine for timer 1 is used to generate one or more standard
 // hobby servo signals.  The servo signal has a fixed period of 20ms and a pulse width
@@ -27,15 +34,15 @@ void __ISR(_TIMER_1_VECTOR, IPL5SOFT) Timer1_Handler(void)
 	IFS0CLR=_IFS0_T1IF_MASK; // Clear timer 1 interrupt flag, bit 4 of IFS0
 
 	ISR_cnt++;
-	if(ISR_cnt==ISR_pwm1)
+	if(ISR_cnt==ISR_pwm1) /* This is the timer for servo motor 1; the Arm */
 	{
 		LATAbits.LATA3 = 0;
 	}
-	if(ISR_cnt==ISR_pwm2)
+	if(ISR_cnt==ISR_pwm2) /* This is the timer for servo motor 2; the Base */
 	{
 		LATBbits.LATB4 = 0;
 	}
-	if(ISR_cnt>=2000)
+	if(ISR_cnt>=2000) /* This is generating the required pulse every 20ms for the servo to operate */
 	{
 		ISR_cnt=0; // 2000 * 10us=20ms
 		LATAbits.LATA3 = 1;
@@ -136,7 +143,7 @@ void uart_puts(char * s)
 
 char HexDigit[]="0123456789ABCDEF";
 void PrintNumber(long int val, int Base, int digits)
-{
+{ 
 	int j;
 	#define NBITS 32
 	char buff[NBITS+1];
@@ -207,6 +214,22 @@ void main(void)
     long int v;
 	unsigned long int count, f;
 	unsigned char LED_toggle=0;
+	int i = 0;
+
+	/* Constants for the Voltage of the Perimeter Detectors */
+	double per_threshold_1 = 0.100;
+	double per_threshold_2 = 0.100;
+
+	/* Variables to Store Measured Voltages & Periods */
+	int adcval4, adcval5;
+	double v4, v5;
+	int count_Period;
+
+	/* Constant for the Frequency of the Metal Detector */
+	unsigned long int coin_threshold = 37350;
+
+	/* Counter for the # of Coins Picked Up */
+	int count_Coins = 0;
 
 	CFGCON = 0;
   
@@ -215,81 +238,271 @@ void main(void)
     SetupTimer1();
   
     ADCConf(); // Configure ADC
+
+	/* Initialize Pins & Direct Robot to Drive Straight */
+	LATAbits.LATA0 = 0; /* Left Side Forward */
+	LATAbits.LATA1 = 0; /* Left Side Reverse */
+	LATBbits.LATB0 = 0; /* Right Side Forward */
+	LATBbits.LATB1 = 0; /* Right Side Reverse */
+	LATAbits.LATA2 = 0; /* Electro-Magnet Off */
     
     waitms(500); // Give PuTTY time to start
-	uart_puts("\x1b[2J\x1b[1;1H"); // Clear screen using ANSI escape sequence.
-	uart_puts("\r\nPIC32 multi I/O example.\r\n");
-	uart_puts("Measures the voltage at channels 4 and 5 (pins 6 and 7 of DIP28 package)\r\n");
-	uart_puts("Measures period on RB5 (pin 14 of DIP28 package)\r\n");
-	uart_puts("Toggles RA0, RA1, RB0, RB1, RA2 (pins 2, 3, 4, 5, 9, of DIP28 package)\r\n");
-	uart_puts("Generates Servo PWM signals at RA3, RB4 (pins 10, 11 of DIP28 package)\r\n\r\n");
-	while(1)
-	{
-    	adcval = ADCRead(4); // note that we call pin AN4 (RB2) by it's analog number
-		uart_puts("ADC[4]=0x");
-		PrintNumber(adcval, 16, 3);
-		uart_puts(", V=");
-		v=(adcval*3290L)/1023L; // 3.290 is VDD
-		PrintNumber(v/1000, 10, 1);
-		uart_puts(".");
-		PrintNumber(v%1000, 10, 3);
-		uart_puts("V ");
 
-		adcval=ADCRead(5);
-		uart_puts("ADC[5]=0x");
-		PrintNumber(adcval, 16, 3);
-		uart_puts(", V=");
-		v=(adcval*3290L)/1023L; // 3.290 is VDD
-		PrintNumber(v/1000, 10, 1);
-		uart_puts(".");
-		PrintNumber(v%1000, 10, 3);
-		uart_puts("V ");
+	while(1) {
+		/* Direct Robot to Drive Straight */
+		LATAbits.LATA0 = 1; /* Left Side Forward */
+		LATAbits.LATA1 = 0; /* Left Side Reverse */
+		LATBbits.LATB0 = 1; /* Right Side Forward */
+		LATBbits.LATB1 = 0; /* Right Side Reverse */
+		LATAbits.LATA2 = 0; /* Electro-Magnet Off */
 
-		count=GetPeriod(100);
-		if(count>0)
-		{
-			f=((SYSCLK/2L)*100L)/count;
-			uart_puts("f=");
-			PrintNumber(f, 10, 7);
-			uart_puts("Hz, count=");
-			PrintNumber(count, 10, 6);
-			uart_puts("          \r");
+		/* Get Voltages of Perimeter Detectors - Pins 4 & 5 */
+		adcval4 = ADCRead(4);
+		v4 = ( ( adcval4 * 3290.0 ) / 1023.0 ) / 1000.0;
+		adcval5 = ADCRead(5);
+		v5 = ( ( adcval5 * 3290.0 ) / 1023.0) / 1000.0;
+		
+
+		/* Check if Perimeter is Detected */
+		if ( ( v4 > per_threshold_1 ) || ( v5 > per_threshold_2 ) ) {
+			LATAbits.LATA0 = 0; /* Left Side Forward */
+			LATAbits.LATA1 = 0; /* Left Side Reverse */
+			LATBbits.LATB0 = 0; /* Right Side Forward */
+			LATBbits.LATB1 = 0; /* Right Side Reverse */
+
+			waitms(100);
+
+			/* Reverse a Little Bit to Give Robot Room from Perimeter */
+			LATAbits.LATA0 = 0; /* Left Side Forward */
+			LATAbits.LATA1 = 1; /* Left Side Reverse */
+			LATBbits.LATB0 = 0; /* Right Side Forward */
+			LATBbits.LATB1 = 1; /* Right Side Reverse */
+
+			/* Allow Robot to Reverse for 25ms */
+			waitms(2400);
+
+			LATAbits.LATA0 = 0; /* Left Side Forward */
+			LATAbits.LATA1 = 0; /* Left Side Reverse */
+			LATBbits.LATB0 = 0; /* Right Side Forward */
+			LATBbits.LATB1 = 0; /* Right Side Reverse */
+
+			waitms(100);
+
+			/* Pivot the Robot's Direction */
+			LATAbits.LATA0 = 1; /* Left Side Forward */
+			LATAbits.LATA1 = 0; /* Left Side Reverse */
+			LATBbits.LATB0 = 0; /* Right Side Forward */
+			LATBbits.LATB1 = 1; /* Right Side Reverse */
+
+			/* Allow Robot to Pivot for 100ms */
+			waitms(250);
 		}
-		else
+
+		/* Get Frequency of Metal Detector */
+		count_Period = GetPeriod(150);
+		if( count_Period > 0 )
 		{
-			uart_puts("NO SIGNAL                     \r");
+			waitms(10);
+			f = ( ( SYSCLK / 2L ) * 100L )/ count_Period;
 		}
 
-		// Now toggle the pins on/off to see if they are working.
-		// First turn all off:
-		LATAbits.LATA0 = 0;	
-		LATAbits.LATA1 = 0;			
-		LATBbits.LATB0 = 0;			
-		LATBbits.LATB1 = 0;		
-		LATAbits.LATA2 = 1;			
-		// // Now turn on one of the outputs per loop cycle to check
-		// switch (LED_toggle++)
-		// {
-		// 	case 0:
-		// 		LATAbits.LATA0 = 1; /* Left Side Forward */
-		// 		break;
-		// 	case 1:
-		// 		LATAbits.LATA1 = 1; /* Left Side Reverse */
-		// 		break;
-		// 	case 2:
-		// 		LATBbits.LATB0 = 1; /* Right Side Forward */
-		// 		break;
-		// 	case 3:
-		// 		LATBbits.LATB1 = 1; /* Right Side Reverse */
-		// 		break;
-		// 	case 4:
-		// 		LATAbits.LATA2 = 1; /* Electro-Magnet */
-		// 		break;
-		// 	default:
-		// 		break;
-		// }
-		// if(LED_toggle>4) LED_toggle=0;
+		printf("%d\n", f);
 
-		waitms(200);
+		/* Check if Metal Coin is Detected */
+		if ( f > coin_threshold ) {
+			/* Make the Robot Stop a few Centimetres Back */
+			LATAbits.LATA0 = 0; /* Left Side Forward */
+			LATAbits.LATA1 = 0; /* Left Side Reverse */
+			LATBbits.LATB0 = 0; /* Right Side Forward */
+			LATBbits.LATB1 = 0; /* Right Side Reverse */
+			waitms(100);
+
+			/* Make the Robot Stop a few Centimetres Back */
+			LATAbits.LATA0 = 0; /* Left Side Forward */
+			LATAbits.LATA1 = 1; /* Left Side Reverse */
+			LATBbits.LATB0 = 0; /* Right Side Forward */
+			LATBbits.LATB1 = 1; /* Right Side Reverse */
+			waitms(210);
+
+			LATAbits.LATA0 = 0; /* Left Side Forward */
+			LATAbits.LATA1 = 0; /* Left Side Reverse */
+			LATBbits.LATB0 = 0; /* Right Side Forward */
+			LATBbits.LATB1 = 0; /* Right Side Reverse */
+
+			/* Turn On the Magnet to Pull the Coin */
+			LATAbits.LATA2 = 1; /* Electro-Magnet On */
+
+			/* Bend the Servo-Arm Down into a Position to Pick-Up Coin */
+			// 1 is Arm, 2 is Base
+			i = MINANGLE;
+			while(i <= MINANGLE_BASE) {
+				ISR_pwm2 = i;
+				waitms(10);
+				i++;
+			}
+			i = MINANGLE;
+			while(i <= MAXANGLE_ARM) {
+				ISR_pwm1 = i;
+				waitms(10);
+				i++;
+			}
+
+			waitms(10);
+
+			/* Sweep */
+			i = MINANGLE_BASE;
+			while(i <= MAXANGLE) {
+				ISR_pwm2 = i;
+				waitms(10);
+				i++;
+			}
+			
+			waitms(10);
+
+			/* Bend the Servo-Arm into a Position to Drop-Off the Coin */
+			i = MAXANGLE_ARM;
+			while(i >= MINANGLE) {
+				ISR_pwm1 = i;
+				waitms(10);
+				i--;
+			}
+
+			i = MAXANGLE;
+			while(i >= MINANGLE) {
+				ISR_pwm2 = i;
+				waitms(10);
+				i--;
+			}
+
+			waitms(10);
+
+			/* Turn Off the Magnet to Release the Coin */
+			LATAbits.LATA2 = 0; /* Electro-Magnet Off */
+
+			/* Coin Pick-Up Successful - Increment the Counter for # of Coins Collected */
+			count_Coins++;
+			/* coin_threshold += 20; */
+
+			LATAbits.LATA0 = 0; /* Left Side Forward */
+			LATAbits.LATA1 = 0; /* Left Side Reverse */
+			LATBbits.LATB0 = 0; /* Right Side Forward */
+			LATBbits.LATB1 = 0; /* Right Side Reverse */
+
+			/* If All 20 Coins are Picked Up, Terminate Program */
+			if ( count_Coins == 20 ) {
+				/* Rotate Counter-Clockwise for a Full Turn */
+				LATAbits.LATA0 = 0; /* Left Side Forward */
+				LATAbits.LATA1 = 1; /* Left Side Reverse */
+				LATBbits.LATB0 = 1; /* Right Side Forward */
+				LATBbits.LATB1 = 0; /* Right Side Reverse */
+				LATAbits.LATA2 = 0; /* Electro-Magnet Off */
+
+				waitms(2500);
+
+				/* Stop Rotation */
+				LATAbits.LATA0 = 0; /* Left Side Forward */
+				LATAbits.LATA1 = 0; /* Left Side Reverse */
+				LATBbits.LATB0 = 0; /* Right Side Forward */
+				LATBbits.LATB1 = 0; /* Right Side Reverse */
+				LATAbits.LATA2 = 0; /* Electro-Magnet Off */
+
+				waitms(10);
+
+				/* Rotate Clockwise for a Full Turn */
+				LATAbits.LATA0 = 1; /* Left Side Forward */
+				LATAbits.LATA1 = 0; /* Left Side Reverse */
+				LATBbits.LATB0 = 0; /* Right Side Forward */
+				LATBbits.LATB1 = 1; /* Right Side Reverse */
+				LATAbits.LATA2 = 0; /* Electro-Magnet Off */
+
+				waitms(2500);
+				
+				/* Stop Rotation */
+				LATAbits.LATA0 = 0; /* Left Side Forward */
+				LATAbits.LATA1 = 0; /* Left Side Reverse */
+				LATBbits.LATB0 = 0; /* Right Side Forward */
+				LATBbits.LATB1 = 0; /* Right Side Reverse */
+				LATAbits.LATA2 = 0; /* Electro-Magnet Off */
+
+				exit(0);
+			}
+		}
 	}
+
+	// uart_puts("\x1b[2J\x1b[1;1H"); // Clear screen using ANSI escape sequence.
+	// uart_puts("\r\nPIC32 multi I/O example.\r\n");
+	// uart_puts("Measures the voltage at channels 4 and 5 (pins 6 and 7 of DIP28 package)\r\n");
+	// uart_puts("Measures period on RB5 (pin 14 of DIP28 package)\r\n");
+	// uart_puts("Toggles RA0, RA1, RB0, RB1, RA2 (pins 2, 3, 4, 5, 9, of DIP28 package)\r\n");
+	// uart_puts("Generates Servo PWM signals at RA3, RB4 (pins 10, 11 of DIP28 package)\r\n\r\n");
+	// while(1)
+	// {
+    // 	adcval = ADCRead(4); // note that we call pin AN4 (RB2) by it's analog number
+	// 	uart_puts("ADC[4]=0x");
+	// 	PrintNumber(adcval, 16, 3);
+	// 	uart_puts(", V=");
+	// 	v=(adcval*3290L)/1023L; // 3.290 is VDD
+	// 	PrintNumber(v/1000, 10, 1);
+	// 	uart_puts(".");
+	// 	PrintNumber(v%1000, 10, 3);
+	// 	uart_puts("V ");
+
+	// 	adcval=ADCRead(5);
+	// 	uart_puts("ADC[5]=0x");
+	// 	PrintNumber(adcval, 16, 3);
+	// 	uart_puts(", V=");
+	// 	v=(adcval*3290L)/1023L; // 3.290 is VDD
+	// 	PrintNumber(v/1000, 10, 1);
+	// 	uart_puts(".");
+	// 	PrintNumber(v%1000, 10, 3);
+	// 	uart_puts("V ");
+
+	// 	count=GetPeriod(100);
+	// 	if(count>0)
+	// 	{
+	// 		f=((SYSCLK/2L)*100L)/count;
+	// 		uart_puts("f=");
+	// 		PrintNumber(f, 10, 7);
+	// 		uart_puts("Hz, count=");
+	// 		PrintNumber(count, 10, 6);
+	// 		uart_puts("          \r");
+	// 	}
+	// 	else
+	// 	{
+	// 		uart_puts("NO SIGNAL                     \r");
+	// 	}
+
+	// 	// Now toggle the pins on/off to see if they are working.
+	// 	// First turn all off:
+	// 	LATAbits.LATA0 = 0;	
+	// 	LATAbits.LATA1 = 0;			
+	// 	LATBbits.LATB0 = 0;			
+	// 	LATBbits.LATB1 = 0;		
+	// 	LATAbits.LATA2 = 0;			
+
+	// 	// Now turn on one of the outputs per loop cycle to check
+	// 	switch (LED_toggle++)
+	// 	{
+	// 		case 0:
+	// 			LATAbits.LATA0 = 1;
+	// 			break;
+	// 		case 1:
+	// 			LATAbits.LATA1 = 1;
+	// 			break;
+	// 		case 2:
+	// 			LATBbits.LATB0 = 1;
+	// 			break;
+	// 		case 3:
+	// 			LATBbits.LATB1 = 1;
+	// 			break;
+	// 		case 4:
+	// 			LATAbits.LATA2 = 1;
+	// 			break;
+	// 		default:
+	// 			break;
+	// 	}
+	// 	if(LED_toggle>4) LED_toggle=0;
+
+	// 	waitms(200);
+	// }
 }

@@ -266,29 +266,29 @@ void main(void)
 		LATAbits.LATA1 = 0;			
 		LATBbits.LATB0 = 0;			
 		LATBbits.LATB1 = 0;		
-		LATAbits.LATA2 = 0;			
-		// Now turn on one of the outputs per loop cycle to check
-		switch (LED_toggle++)
-		{
-			case 0:
-				LATAbits.LATA0 = 1; /* Left Side Forward */
-				break;
-			case 1:
-				LATAbits.LATA1 = 1; /* Left Side Reverse */
-				break;
-			case 2:
-				LATBbits.LATB0 = 1; /* Right Side Forward */
-				break;
-			case 3:
-				LATBbits.LATB1 = 1; /* Right Side Reverse */
-				break;
-			case 4:
-				LATAbits.LATA2 = 1; /* Electro-Magnet */
-				break;
-			default:
-				break;
-		}
-		if(LED_toggle>4) LED_toggle=0;
+		LATAbits.LATA2 = 1;			
+		// // Now turn on one of the outputs per loop cycle to check
+		// switch (LED_toggle++)
+		// {
+		// 	case 0:
+		// 		LATAbits.LATA0 = 1; /* Left Side Forward */
+		// 		break;
+		// 	case 1:
+		// 		LATAbits.LATA1 = 1; /* Left Side Reverse */
+		// 		break;
+		// 	case 2:
+		// 		LATBbits.LATB0 = 1; /* Right Side Forward */
+		// 		break;
+		// 	case 3:
+		// 		LATBbits.LATB1 = 1; /* Right Side Reverse */
+		// 		break;
+		// 	case 4:
+		// 		LATAbits.LATA2 = 1; /* Electro-Magnet */
+		// 		break;
+		// 	default:
+		// 		break;
+		// }
+		// if(LED_toggle>4) LED_toggle=0;
 
 		waitms(200);
 	}

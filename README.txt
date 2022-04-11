@@ -1,1 +1,1 @@
-ELEC291 Coin Picking Robot
+Coin Picking Robot
